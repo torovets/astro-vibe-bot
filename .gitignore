@@ -1,0 +1,9 @@
+.env
+data.db
+telethon.session
+telethon.session-journal
+
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
