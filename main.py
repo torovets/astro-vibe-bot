@@ -31,6 +31,20 @@ SIGN_NAME_UA = {
     "Aquarius": "Водолій",
     "Pisces": "Риби",
 }
+SIGN_EMOJI = {
+    "Aries": "♈",
+    "Taurus": "♉",
+    "Gemini": "♊",
+    "Cancer": "♋",
+    "Leo": "♌",
+    "Virgo": "♍",
+    "Libra": "♎",
+    "Scorpio": "♏",
+    "Sagittarius": "♐",
+    "Capricorn": "♑",
+    "Aquarius": "♒",
+    "Pisces": "♓",
+}
 SIGN_NAME_EN = {ua: en for en, ua in SIGN_NAME_UA.items()}
 
 
@@ -131,6 +145,21 @@ def normalize_sign(sign: str) -> str:
 
 def display_sign(sign: str) -> str:
     return SIGN_NAME_UA.get(sign, sign)
+
+
+def display_sign_with_emoji(sign: str) -> str:
+    return f"{SIGN_EMOJI.get(sign, '')} {display_sign(sign)}".strip()
+
+
+def parse_admin_ids(raw_value: str | None) -> set[int]:
+    if not raw_value:
+        return set()
+    tokens = raw_value.replace(",", " ").split()
+    ids: set[int] = set()
+    for token in tokens:
+        if token.isdigit():
+            ids.add(int(token))
+    return ids
 
 
 def extract_invite_hash(channel: str) -> str | None:
@@ -243,7 +272,9 @@ async def generate_daily_context(
     system_prompt = (
         "Ти редактор астрологічних прогнозів. Стисло підсумуй новини дня у "
         "підбадьорливий «Вайб дня» для кожного знаку зодіаку. Використовуй "
-        "надані риси знаків, щоб персоналізувати текст. Кожен вайб 2–3 речення. "
+        "надані риси знаків, щоб персоналізувати текст. Кожен вайб має містити "
+        "рівно 4 речення: перше про те як поводитись у ці часиб друге про особисті переваги, третє про кохання, четверте про гроші "
+        "Варіюй слова коли генеруєш вайб, щоб було цікаво і не виглядало що усі вайби оданкові."
         "Відповідай лише українською."
     )
     user_prompt = (
@@ -292,19 +323,26 @@ async def get_or_generate_context(
     return context
 
 
-def build_all_signs_message(context: dict, signs: dict, timezone: ZoneInfo) -> str:
+def build_channel_sign_messages(context: dict, signs: dict) -> list[str]:
     vibes = context.get("vibes", {})
     global_summary = context.get("global_summary", "")
     affirmation = context.get("affirmation", "")
-    lines = [affirmation or "Сьогодні ти на правильному шляху.", ""]
-    if global_summary:
-        lines.append(global_summary)
-        lines.append("")
+    messages: list[str] = []
+    first = True
     for sign in signs.keys():
         vibe = vibes.get(sign, "Вайб формується. Перевір пізніше.")
-        lines.append(f"{display_sign(sign)}: {vibe}")
-        lines.append("")
-    return "\n".join(lines).strip()
+        lines: list[str] = []
+        if first:
+            if affirmation:
+                lines.append(affirmation)
+            if global_summary:
+                lines.append(global_summary)
+            if lines:
+                lines.append("")
+            first = False
+        lines.append(f"{display_sign_with_emoji(sign)}: {vibe}")
+        messages.append("\n".join(lines).strip())
+    return messages
 
 
 async def broadcast_daily_vibes(
@@ -335,14 +373,14 @@ async def broadcast_daily_vibes(
             )
             continue
         vibe = vibes.get(sign, "Вайб формується. Перевір пізніше.")
-        message = f"Вайб дня для {display_sign(sign)}:\n{vibe}"
+        message = f"Вайб дня для {display_sign_with_emoji(sign)}:\n{vibe}"
         if global_summary:
             message += f"\n\nГлобальний контекст: {global_summary}"
         await bot.send_message(chat_id, message)
 
     if channel_id:
-        channel_message = build_all_signs_message(context, signs, timezone)
-        await bot.send_message(channel_id, channel_message)
+        for channel_message in build_channel_sign_messages(context, signs):
+            await bot.send_message(channel_id, channel_message)
 
 
 def build_personal_prompt(sign: str, sign_data: dict, context: dict, question: str) -> str:
@@ -351,7 +389,7 @@ def build_personal_prompt(sign: str, sign_data: dict, context: dict, question: s
     vibe = context.get("vibes", {}).get(sign, "")
     global_summary = context.get("global_summary", "")
     return (
-        f"Знак користувача: {display_sign(sign)}\n"
+        f"Знак користувача: {display_sign_with_emoji(sign)}\n"
         f"Риси: {traits}\n"
         f"Специфіка: {specificity}\n"
         f"Вайб дня: {vibe}\n"
@@ -371,6 +409,7 @@ async def main() -> None:
     timezone_name = os.getenv("TIMEZONE", "UTC")
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     channel_id = os.getenv("BROADCAST_CHANNEL")
+    admin_ids = parse_admin_ids(os.getenv("ADMIN_USER_IDS"))
     telegram_api_id = os.getenv("TELEGRAM_API_ID")
     telegram_api_hash = os.getenv("TELEGRAM_API_HASH")
     telegram_channel = os.getenv("TELEGRAM_NEWS_CHANNEL")
@@ -439,7 +478,28 @@ async def main() -> None:
             telegram_source=telegram_source,
         )
         vibe = context.get("vibes", {}).get(sign, "Вайб формується. Перевір пізніше.")
-        await message.answer(f"Вайб дня для {display_sign(sign)}:\n{vibe}")
+        await message.answer(f"Вайб дня для {display_sign_with_emoji(sign)}:\n{vibe}")
+
+    @dp.message(Command("broadcast_now"))
+    async def handle_broadcast_now(message: Message) -> None:
+        upsert_user(message.from_user.id, message.chat.id, message.from_user.username)
+        if admin_ids and message.from_user.id not in admin_ids:
+            await message.answer("Недостатньо прав для цієї команди.")
+            return
+        if not channel_id:
+            await message.answer("BROADCAST_CHANNEL не налаштовано.")
+            return
+        context = await get_or_generate_context(
+            client,
+            signs,
+            rss_url,
+            model,
+            timezone,
+            telegram_source=telegram_source,
+        )
+        for channel_message in build_channel_sign_messages(context, signs):
+            await bot.send_message(channel_id, channel_message)
+        await message.answer("Надіслано в канал.")
 
     @dp.message(F.text & ~F.text.startswith("/"))
     async def handle_personal_query(message: Message) -> None:
