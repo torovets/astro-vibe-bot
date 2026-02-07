@@ -150,16 +150,21 @@ async def fetch_telegram_messages(
     channel: str | None,
     limit: int,
     session_path: str,
+    session_string: str | None = None,
 ) -> list[str]:
     if not api_id or not api_hash or not channel:
         return []
     try:
         from telethon import TelegramClient
+        from telethon.sessions import StringSession
         from telethon.tl.functions.messages import ImportChatInviteRequest
     except Exception:
         return []
 
-    client = TelegramClient(session_path, api_id, api_hash)
+    if session_string:
+        client = TelegramClient(StringSession(session_string), api_id, api_hash)
+    else:
+        client = TelegramClient(session_path, api_id, api_hash)
     await client.start()
     try:
         entity = None
@@ -199,6 +204,7 @@ async def generate_daily_context(
             channel=telegram_source.get("channel"),
             limit=telegram_source.get("limit", 20),
             session_path=telegram_source.get("session_path", "telethon.session"),
+            session_string=telegram_source.get("session_string"),
         )
         if messages:
             news_blob = "\n".join([f"- {message}" for message in messages])
@@ -370,6 +376,7 @@ async def main() -> None:
     telegram_channel = os.getenv("TELEGRAM_NEWS_CHANNEL")
     telegram_limit = int(os.getenv("TELEGRAM_NEWS_LIMIT", "20"))
     telethon_session = os.getenv("TELETHON_SESSION", "telethon.session")
+    telethon_session_string = os.getenv("TELETHON_SESSION_STRING")
 
     if not telegram_token or not openai_key:
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN or OPENAI_API_KEY.")
@@ -385,6 +392,7 @@ async def main() -> None:
         "channel": telegram_channel,
         "limit": telegram_limit,
         "session_path": telethon_session,
+        "session_string": telethon_session_string,
     }
 
     bot = Bot(token=telegram_token)
