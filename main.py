@@ -532,21 +532,20 @@ async def main() -> None:
 
     scheduler = AsyncIOScheduler(timezone=timezone)
     scheduler.add_job(
-        lambda: asyncio.create_task(
-            broadcast_daily_vibes(
-                bot,
-                client,
-                signs,
-                rss_url,
-                model,
-                timezone,
-                channel_id,
-                telegram_source,
-            )
-        ),
+        broadcast_daily_vibes,
         "cron",
-        hour=8,
+        hour=9,
         minute=0,
+        args=[
+            bot,
+            client,
+            signs,
+            rss_url,
+            model,
+            timezone,
+            channel_id,
+            telegram_source,
+        ],
     )
     scheduler.start()
 
