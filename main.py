@@ -297,9 +297,35 @@ async def generate_daily_context(
         temperature=0.6,
     )
     payload = json.loads(response.choices[0].message.content)
+
+    # Post-process global_summary into a zodiac-forecast intro
+    raw_global_summary = payload.get("global_summary", "")
+    if raw_global_summary:
+        summary_user_prompt = (
+            "Напиши коротке інтро до щоденних зодіак-прогнозів у Telegram-каналі. "
+            "Це НЕ дайджест новин, а настрій дня перед прогнозами. "
+            "Візьми 1 факт із новин і обіграй його непрямо, без слова 'НОВИНИ'. "
+            "Рівно 1 речення, до 140 символів. "
+            "Без шаблонного оптимізму. "
+            "\n\n"
+            f"{news_blob}\n\n"
+            f"{raw_global_summary}"
+        )
+        summary_response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": summary_user_prompt},
+            ],
+            temperature=0.7,
+        )
+        polished_summary = summary_response.choices[0].message.content.strip()
+    else:
+        polished_summary = raw_global_summary
+
     return {
         "affirmation": payload.get("affirmation", ""),
-        "global_summary": payload.get("global_summary", ""),
+        "global_summary": polished_summary,
         "vibes": payload.get("vibes", {}),
     }
 
