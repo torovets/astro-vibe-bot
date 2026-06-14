@@ -30,7 +30,7 @@ TONE_VARIANTS = {
     "sharp": "Цей випуск — гостра іронія з легким підʼюджуванням читача: сміливо, дотепно, але по-доброму.",
     "savage": "Цей випуск — саркастична іронія на межі: гостро, провокативно, чіпко, але без приниження читача.",
 }
-DEFAULT_TONE = "sharp"
+DEFAULT_TONE = "savage"
 
 
 def build_channel_system(tone: str | None = None) -> str:

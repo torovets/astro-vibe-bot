@@ -36,7 +36,7 @@ cp .env.example .env
 - `BROADCAST_CHANNEL` (канал для щоденної розсилки)
 - `TELEGRAM_API_ID`, `TELEGRAM_API_HASH` (для Telethon)
 - `TELEGRAM_NEWS_CHANNEL` (канал новин)
-- `CHANNEL_TONE` (опціонально: `sharp` — гостра іронія, або `savage` — на межі сарказму; дефолт `sharp`)
+- `CHANNEL_TONE` (опціонально: `savage` — на межі сарказму, або `sharp` — гостра іронія; дефолт `savage`)
 
 Ознаки знаків: `config/signs.yaml` (риси, специфіка + `stereotype`/`love_style`/`money_style` для рубрики портретів).
 Теми психологічної рубрики: `config/rubrics.yaml`.
