@@ -59,8 +59,8 @@ python main.py
 - Будь-який текст без `/` — персональна відповідь з урахуванням знаку та вайбу дня.
 
 Лише для адмінів (`ADMIN_USER_IDS`):
-- `/broadcast_now` — миттєва щоденна розсилка в канал (з обкладинкою).
-- `/post_cover` — перегенерувати обкладинку на сьогодні (новий фон) і надіслати в канал.
+- `/broadcast_now` — миттєва щоденна розсилка в канал (обкладинка + 12 карток знаків).
+- `/post_cover` — перегенерувати фон дня (нова обкладинка) і надіслати в канал.
 - `/post_spotlight` — опублікувати наступний портрет знаку.
 - `/post_hook` — опублікувати наступний психологічний пост.
 
@@ -72,13 +72,20 @@ python main.py
 Бот надсилає повідомлення о 09:00 за `TIMEZONE`.
 Зроби бота адміном каналу, вказаного у `BROADCAST_CHANNEL`.
 
-Перед знаками публікується щоденна обкладинка-зображення: AI-фон (`gpt-image-1`,
-фолбек `dall-e-3`) + український текст (афірмація + інтро), накладений локально
-через Pillow (шрифт PT Sans: `assets/fonts/PTSans-Regular.ttf`,
-`assets/fonts/PTSans-Bold.ttf`). Фон кешується в таблиці `daily_cover` по даті,
-тож повторні запуски за той самий день не платять за API повторно. Якщо
-генерація падає — канал отримує звичайний текстовий інтро-блок (розсилка ніколи
-не блокується). Деталі рендерингу: `render.py`.
+У канал публікується **обкладинка дня** (афірмація + інтро) і **12 карток
+знаків** — прогноз кожного знаку окремим зображенням з великим символом знаку
+(♈–♓) та текстом на картинці.
+
+- Один AI-фон на день (`gpt-image-1`, фолбек `dall-e-3`) генерується раз і
+  перевикористовується для обкладинки та всіх 12 карток — кешується в таблиці
+  `daily_background` (повторні запуски за той самий день не платять за API).
+- Текст накладається локально через Pillow: PT Sans для українського тексту
+  (`assets/fonts/PTSans-*.ttf`), DejaVu Sans для символів знаків
+  (`assets/fonts/DejaVuSans.ttf` — PT Sans їх не містить).
+- Якщо генерація зображення падає — канал отримує звичайні текстові прогнози
+  (розсилка ніколи не блокується).
+
+Деталі рендерингу: `render.py` (`render_card`, `render_sign_card`).
 
 ## Щотижневі рубрики
 - **Портрети знаків** — щосереди 18:00, по черзі всі 12 знаків без повторів.
@@ -105,12 +112,12 @@ python main.py
 
 ## Структура модулів
 Код розбито на модулі (раніше все було в `main.py`):
-- `db.py` — робота з SQLite (користувачі, кеш денного контексту, ротація рубрик, кеш обкладинок): `init_db`, `upsert_user`, `set_user_sign`, `get_user_sign`, `get_all_users`, `load_today_context`, `save_today_context`, `load_recent_intros` (різноманіття інтро), `record_rubric` / `get_used_subjects` / `next_subject` (ротація рубрик), `load_today_cover` / `save_today_cover` (кеш обкладинок), `DB_PATH`. Таблиці: `users`, `daily_context`, `rubric_history`, `daily_cover`.
+- `db.py` — робота з SQLite (користувачі, кеш денного контексту, ротація рубрик, кеш фону): `init_db`, `upsert_user`, `set_user_sign`, `get_user_sign`, `get_all_users`, `load_today_context`, `save_today_context`, `load_recent_intros` (різноманіття інтро), `record_rubric` / `get_used_subjects` / `next_subject` (ротація рубрик), `load_today_background` / `save_today_background` (кеш AI-фону дня), `DB_PATH`. Таблиці: `users`, `daily_context`, `rubric_history`, `daily_background`.
 - `news.py` — отримання новин: `fetch_telegram_messages`, `extract_invite_hash`, а також `fetch_news_blob()` (Telethon з фолбеком на RSS).
 - `generation.py` — генерація через OpenAI (`AsyncOpenAI`): `generate_daily_context`, `get_or_generate_context`, `build_personal_prompt`, плюс хелпери з ретраями `complete_json` / `complete_text`.
 - `telegram_io.py` — формат повідомлень і розсилка: `build_channel_sign_messages`, `broadcast_daily_vibes`, `send_daily_cover`, константи знаків (`SIGN_NAME_UA`, `SIGN_EMOJI`, ...), `load_signs`, `normalize_sign`, `display_sign`, `display_sign_with_emoji`.
 - `rubrics.py` — щотижневі рубрики: `generate_sign_spotlight`, `generate_psych_hook`, `post_spotlight`, `post_hook`.
-- `render.py` — обкладинки: `build_background_prompt`, `generate_background`, `render_card`.
+- `render.py` — зображення: `build_background_prompt`, `generate_background`, `render_card` (обкладинка), `render_sign_card` (картка знаку).
 - `main.py` — лише завантаження env, налаштування логування, реєстрація хендлерів, планувальник і точка входу.
 
 ## Промпти (`prompts/`)

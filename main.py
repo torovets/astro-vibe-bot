@@ -32,6 +32,7 @@ from telegram_io import (
     load_signs,
     normalize_sign,
     send_daily_cover,
+    send_sign_cards,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,12 +147,16 @@ async def main() -> None:
         )
         today_key = datetime.now(timezone).date().isoformat()
         cover_sent = await send_daily_cover(bot, client, channel_id, context, today_key)
-        for channel_message in build_channel_sign_messages(
-            context, signs, include_intro=not cover_sent
-        ):
-            await bot.send_message(channel_id, channel_message)
-        status = "з обкладинкою" if cover_sent else "без обкладинки (див. лог)"
-        await message.answer(f"Надіслано в канал ({status}).")
+        cards = await send_sign_cards(bot, client, channel_id, context, signs, today_key)
+        if cards is None:
+            for channel_message in build_channel_sign_messages(
+                context, signs, include_intro=not cover_sent
+            ):
+                await bot.send_message(channel_id, channel_message)
+            status = "текстом (зображення недоступні, див. лог)"
+        else:
+            status = "обкладинка + 12 карток знаків"
+        await message.answer(f"Надіслано в канал: {status}.")
 
     @dp.message(Command("post_cover"))
     async def handle_post_cover(message: Message) -> None:
