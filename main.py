@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
@@ -30,6 +31,7 @@ from telegram_io import (
     display_sign_with_emoji,
     load_signs,
     normalize_sign,
+    send_daily_cover,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,9 +144,40 @@ async def main() -> None:
             timezone,
             telegram_source=telegram_source,
         )
-        for channel_message in build_channel_sign_messages(context, signs):
+        today_key = datetime.now(timezone).date().isoformat()
+        cover_sent = await send_daily_cover(bot, client, channel_id, context, today_key)
+        for channel_message in build_channel_sign_messages(
+            context, signs, include_intro=not cover_sent
+        ):
             await bot.send_message(channel_id, channel_message)
-        await message.answer("Надіслано в канал.")
+        status = "з обкладинкою" if cover_sent else "без обкладинки (див. лог)"
+        await message.answer(f"Надіслано в канал ({status}).")
+
+    @dp.message(Command("post_cover"))
+    async def handle_post_cover(message: Message) -> None:
+        upsert_user(message.from_user.id, message.chat.id, message.from_user.username)
+        if admin_ids and message.from_user.id not in admin_ids:
+            await message.answer("Недостатньо прав для цієї команди.")
+            return
+        if not channel_id:
+            await message.answer("BROADCAST_CHANNEL не налаштовано.")
+            return
+        context = await get_or_generate_context(
+            client,
+            signs,
+            rss_url,
+            model,
+            timezone,
+            telegram_source=telegram_source,
+        )
+        today_key = datetime.now(timezone).date().isoformat()
+        cover_sent = await send_daily_cover(
+            bot, client, channel_id, context, today_key, force=True
+        )
+        if cover_sent:
+            await message.answer("Нову обкладинку згенеровано і надіслано в канал.")
+        else:
+            await message.answer("Не вдалося згенерувати обкладинку (див. лог).")
 
     @dp.message(Command("post_spotlight"))
     async def handle_post_spotlight(message: Message) -> None:
