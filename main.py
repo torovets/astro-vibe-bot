@@ -153,6 +153,32 @@ async def main() -> None:
         status = "з обкладинкою" if cover_sent else "без обкладинки (див. лог)"
         await message.answer(f"Надіслано в канал ({status}).")
 
+    @dp.message(Command("post_cover"))
+    async def handle_post_cover(message: Message) -> None:
+        upsert_user(message.from_user.id, message.chat.id, message.from_user.username)
+        if admin_ids and message.from_user.id not in admin_ids:
+            await message.answer("Недостатньо прав для цієї команди.")
+            return
+        if not channel_id:
+            await message.answer("BROADCAST_CHANNEL не налаштовано.")
+            return
+        context = await get_or_generate_context(
+            client,
+            signs,
+            rss_url,
+            model,
+            timezone,
+            telegram_source=telegram_source,
+        )
+        today_key = datetime.now(timezone).date().isoformat()
+        cover_sent = await send_daily_cover(
+            bot, client, channel_id, context, today_key, force=True
+        )
+        if cover_sent:
+            await message.answer("Нову обкладинку згенеровано і надіслано в канал.")
+        else:
+            await message.answer("Не вдалося згенерувати обкладинку (див. лог).")
+
     @dp.message(Command("post_spotlight"))
     async def handle_post_spotlight(message: Message) -> None:
         upsert_user(message.from_user.id, message.chat.id, message.from_user.username)
