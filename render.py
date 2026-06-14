@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 FONTS_DIR = os.path.join(os.path.dirname(__file__), "assets", "fonts")
 FONT_REGULAR = os.path.join(FONTS_DIR, "PTSans-Regular.ttf")
 FONT_BOLD = os.path.join(FONTS_DIR, "PTSans-Bold.ttf")
+# DejaVu Sans carries the zodiac symbols (♈–♓); PT Sans does not.
+FONT_SYMBOL = os.path.join(FONTS_DIR, "DejaVuSans.ttf")
 
 CARD_SIZE = (1080, 1350)  # Telegram portrait 4:5
 
@@ -133,6 +135,71 @@ def render_card(
         y += line_h_body
 
     img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+def render_sign_card(
+    symbol: str,
+    name: str,
+    vibe: str,
+    background_bytes: bytes,
+    size: tuple[int, int] = CARD_SIZE,
+    *,
+    scrim_opacity: int = 160,
+    body_size: int = 52,
+) -> io.BytesIO:
+    """Compose a per-sign card: shared background + large zodiac symbol + vibe.
+
+    The zodiac symbol (DejaVu) is a big translucent watermark in the upper area;
+    the sign name (bold) and vibe text sit in a scrim at the bottom. Returns PNG.
+    """
+    bg = Image.open(io.BytesIO(background_bytes)).convert("RGB")
+    bg = _crop_to_size(bg, size)
+    img = bg.copy().convert("RGBA")
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+
+    margin = int(size[0] * 0.08)
+    max_width = size[0] - 2 * margin
+
+    # Large translucent zodiac symbol as the visual accent (upper third).
+    symbol_font = ImageFont.truetype(FONT_SYMBOL, int(size[0] * 0.40))
+    sb = draw.textbbox((0, 0), symbol, font=symbol_font)
+    sx = (size[0] - (sb[2] - sb[0])) // 2 - sb[0]
+    sy = int(size[1] * 0.10) - sb[1]
+    draw.text((sx, sy), symbol, font=symbol_font, fill=(255, 255, 255, 90))
+
+    # Title (name) + body (vibe), auto-shrunk to fit, anchored to the bottom.
+    name_text = name
+    for attempt_body in range(body_size, 26, -3):
+        attempt_title = int(attempt_body * 1.4)
+        title_font = ImageFont.truetype(FONT_BOLD, attempt_title)
+        body_font = ImageFont.truetype(FONT_REGULAR, attempt_body)
+        body_lines = _wrap(draw, vibe, body_font, max_width)
+        line_h_title = attempt_title + 12
+        line_h_body = attempt_body + 14
+        block_h = line_h_title + 18 + len(body_lines) * line_h_body
+        if block_h <= size[1] * 0.50:
+            break
+
+    pad = int(margin * 0.5)
+    text_y = size[1] - block_h - margin
+    draw.rounded_rectangle(
+        [margin - pad, text_y - pad, size[0] - margin + pad, text_y + block_h + pad],
+        radius=32,
+        fill=(0, 0, 0, scrim_opacity),
+    )
+    y = text_y
+    draw.text((margin, y), name_text, font=title_font, fill=(255, 255, 255, 255))
+    y += line_h_title + 18
+    for line in body_lines:
+        draw.text((margin, y), line, font=body_font, fill=(240, 240, 240, 255))
+        y += line_h_body
+
+    img = Image.alpha_composite(img, overlay).convert("RGB")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
