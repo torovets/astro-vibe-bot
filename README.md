@@ -51,6 +51,18 @@ python main.py
 2) `/set_sign Овен`
 3) Запитай будь-що (наприклад: “Чи варто інвестувати сьогодні?”)
 
+## Команди
+Для всіх користувачів:
+- `/start` — реєстрація та привітання.
+- `/set_sign <знак>` — зберегти свій знак (наприклад: `/set_sign Овен`).
+- `/vibe` — отримати вайб дня для свого знаку.
+- Будь-який текст без `/` — персональна відповідь з урахуванням знаку та вайбу дня.
+
+Лише для адмінів (`ADMIN_USER_IDS`):
+- `/broadcast_now` — миттєва щоденна розсилка в канал.
+- `/post_spotlight` — опублікувати наступний портрет знаку.
+- `/post_hook` — опублікувати наступний психологічний пост.
+
 ## Ручна відправка в канал
 Команда `/broadcast_now` відправляє повідомлення в канал одразу.
 Рекомендується обмежити доступ через `ADMIN_USER_IDS` в `.env`.
@@ -61,9 +73,11 @@ python main.py
 
 Перед знаками публікується щоденна обкладинка-зображення: AI-фон (`gpt-image-1`,
 фолбек `dall-e-3`) + український текст (афірмація + інтро), накладений локально
-через Pillow (шрифт `assets/fonts/PT Sans`). Фон кешується в `daily_cover` по
-даті. Якщо генерація падає — канал отримує звичайний текстовий інтро-блок
-(розсилка ніколи не блокується). Деталі рендерингу: `render.py`.
+через Pillow (шрифт PT Sans: `assets/fonts/PTSans-Regular.ttf`,
+`assets/fonts/PTSans-Bold.ttf`). Фон кешується в таблиці `daily_cover` по даті,
+тож повторні запуски за той самий день не платять за API повторно. Якщо
+генерація падає — канал отримує звичайний текстовий інтро-блок (розсилка ніколи
+не блокується). Деталі рендерингу: `render.py`.
 
 ## Щотижневі рубрики
 - **Портрети знаків** — щосереди 18:00, по черзі всі 12 знаків без повторів.
@@ -73,11 +87,15 @@ python main.py
 таблиці `rubric_history`; коли цикл завершується — починається заново. Логіка: `rubrics.py`.
 
 ## Тон голосу та зразки
-- `CHANNEL_TONE` перемикає тон щоденних вайбів і рубрик.
+- `CHANNEL_TONE` перемикає тон щоденних вайбів і рубрик (`savage` за замовчуванням, `sharp` — мʼякший).
 - `python eval_prompts.py` — генерує по 3 дні на кожен тон + метрики (різноманіття
   початків, довжина, звʼязок із новинами) у `SAMPLES_B.md`.
 - `python generate_samples_c.py` — зразки рубрик у `SAMPLES_C.md`.
-- `python test_render.py` — реальні обкладинки в `samples/` + `SAMPLES_D.md`.
+- `python test_render.py` — реальні обкладинки в `samples/` + опис у `SAMPLES_D.md`.
+
+Готові зразки лежать у `SAMPLES_B.md` / `SAMPLES_C.md` / `SAMPLES_D.md`. Картинки
+в `samples/` навмисно поза git (їх легко перегенерувати `test_render.py`); скрипти
+й тексти-зразки — у репозиторії. Усі три скрипти беруть `OPENAI_API_KEY` з `.env`.
 
 ## Отримання новин з Telegram-каналу
 Використовується Telethon і потрібен вхід під особистим аккаунтом.
@@ -86,7 +104,7 @@ python main.py
 
 ## Структура модулів
 Код розбито на модулі (раніше все було в `main.py`):
-- `db.py` — робота з SQLite (користувачі, кеш денного контексту): `init_db`, `upsert_user`, `set_user_sign`, `get_user_sign`, `get_all_users`, `load_today_context`, `save_today_context`, `DB_PATH`.
+- `db.py` — робота з SQLite (користувачі, кеш денного контексту, ротація рубрик, кеш обкладинок): `init_db`, `upsert_user`, `set_user_sign`, `get_user_sign`, `get_all_users`, `load_today_context`, `save_today_context`, `load_recent_intros` (різноманіття інтро), `record_rubric` / `get_used_subjects` / `next_subject` (ротація рубрик), `load_today_cover` / `save_today_cover` (кеш обкладинок), `DB_PATH`. Таблиці: `users`, `daily_context`, `rubric_history`, `daily_cover`.
 - `news.py` — отримання новин: `fetch_telegram_messages`, `extract_invite_hash`, а також `fetch_news_blob()` (Telethon з фолбеком на RSS).
 - `generation.py` — генерація через OpenAI (`AsyncOpenAI`): `generate_daily_context`, `get_or_generate_context`, `build_personal_prompt`, плюс хелпери з ретраями `complete_json` / `complete_text`.
 - `telegram_io.py` — формат повідомлень і розсилка: `build_channel_sign_messages`, `broadcast_daily_vibes`, `send_daily_cover`, константи знаків (`SIGN_NAME_UA`, `SIGN_EMOJI`, ...), `load_signs`, `normalize_sign`, `display_sign`, `display_sign_with_emoji`.
@@ -116,7 +134,7 @@ python main.py
 
 ## Локальні тести (Notebook)
 - `test_bot.ipynb` — повний прохід: генерація контексту, прев'ю канальних повідомлень для 12 знаків, опційна відправка в чат/канал, пісочниця для персональних відповідей.
-- `prompt_test.ipynb` — ізольована пісочниця для системного промпту каналу. Промпт завантажується з `prompts/channel_system.txt`; його можна перевизначити прямо в клітинці для експериментів.
+- `prompt_test.ipynb` — ізольована пісочниця для системного промпту каналу. Системний промпт зручно брати через `generation.build_channel_system(tone)` (він підставляє `{tone_directive}`); або редагувати `prompts/channel_system.txt` і перезапускати клітинку.
 
 Відкрий потрібний notebook та запусти клітинки послідовно. Обидва імпортують функції з нових модулів (`telegram_io`, `generation`, `news`).
 
