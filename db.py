@@ -25,6 +25,23 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rubric_history (
+                date TEXT NOT NULL,
+                rubric TEXT NOT NULL,
+                subject TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_cover (
+                date TEXT PRIMARY KEY,
+                png BLOB NOT NULL
+            )
+            """
+        )
 
 
 def upsert_user(user_id: int, chat_id: int, username: str | None) -> None:
@@ -87,4 +104,98 @@ def save_today_context(today_key: str, context: dict) -> None:
                 context_json = excluded.context_json
             """,
             (today_key, json.dumps(context)),
+        )
+
+
+# --- Workstream B: recent intros for opener variety ---------------------------
+
+def load_recent_intros(n_days: int = 3) -> list[str]:
+    """Return the global_summary (intro) of the most recent cached days.
+
+    Used to pass yesterday's opener into the intro prompt so the model avoids
+    repeating it. Newest first. Empty list when there is no history.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT context_json FROM daily_context ORDER BY date DESC LIMIT ?",
+                (n_days,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+    intros: list[str] = []
+    for (raw,) in rows:
+        try:
+            summary = json.loads(raw).get("global_summary", "")
+        except (json.JSONDecodeError, AttributeError):
+            summary = ""
+        if summary:
+            intros.append(summary)
+    return intros
+
+
+# --- Workstream C: rubric rotation -------------------------------------------
+
+def record_rubric(rubric: str, subject: str, date_key: str | None = None) -> None:
+    from datetime import date as _date
+
+    date_key = date_key or _date.today().isoformat()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO rubric_history (date, rubric, subject) VALUES (?, ?, ?)",
+            (date_key, rubric, subject),
+        )
+
+
+def get_used_subjects(rubric: str) -> list[str]:
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT subject FROM rubric_history WHERE rubric = ? ORDER BY rowid",
+            (rubric,),
+        ).fetchall()
+    return [row[0] for row in rows]
+
+
+def clear_rubric(rubric: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM rubric_history WHERE rubric = ?", (rubric,))
+
+
+def next_subject(rubric: str, candidates: list[str]) -> str | None:
+    """Pick the first candidate not yet used for this rubric.
+
+    When every candidate has been used, the cycle restarts: history for the
+    rubric is cleared and the first candidate is returned.
+    """
+    if not candidates:
+        return None
+    used = set(get_used_subjects(rubric))
+    for candidate in candidates:
+        if candidate not in used:
+            return candidate
+    # Full cycle complete -> restart rotation.
+    clear_rubric(rubric)
+    return candidates[0]
+
+
+# --- Workstream D: daily cover image cache -----------------------------------
+
+def load_today_cover(today_key: str) -> bytes | None:
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT png FROM daily_cover WHERE date = ?",
+            (today_key,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def save_today_cover(today_key: str, png: bytes) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_cover (date, png)
+            VALUES (?, ?)
+            ON CONFLICT(date) DO UPDATE SET png = excluded.png
+            """,
+            (today_key, png),
         )

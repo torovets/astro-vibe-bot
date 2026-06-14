@@ -22,6 +22,7 @@ from generation import (
     get_or_generate_context,
 )
 from prompts.loader import load_prompt
+from rubrics import post_hook, post_spotlight
 from telegram_io import (
     broadcast_daily_vibes,
     build_channel_sign_messages,
@@ -145,6 +146,30 @@ async def main() -> None:
             await bot.send_message(channel_id, channel_message)
         await message.answer("Надіслано в канал.")
 
+    @dp.message(Command("post_spotlight"))
+    async def handle_post_spotlight(message: Message) -> None:
+        upsert_user(message.from_user.id, message.chat.id, message.from_user.username)
+        if admin_ids and message.from_user.id not in admin_ids:
+            await message.answer("Недостатньо прав для цієї команди.")
+            return
+        if not channel_id:
+            await message.answer("BROADCAST_CHANNEL не налаштовано.")
+            return
+        sign_message = await post_spotlight(bot, client, signs, model, channel_id)
+        await message.answer("Портрет знаку надіслано.\n\n" + sign_message[:200])
+
+    @dp.message(Command("post_hook"))
+    async def handle_post_hook(message: Message) -> None:
+        upsert_user(message.from_user.id, message.chat.id, message.from_user.username)
+        if admin_ids and message.from_user.id not in admin_ids:
+            await message.answer("Недостатньо прав для цієї команди.")
+            return
+        if not channel_id:
+            await message.answer("BROADCAST_CHANNEL не налаштовано.")
+            return
+        hook_message = await post_hook(bot, client, model, channel_id)
+        await message.answer("Психологічний пост надіслано.\n\n" + hook_message[:200])
+
     @dp.message(F.text & ~F.text.startswith("/"))
     async def handle_personal_query(message: Message) -> None:
         upsert_user(message.from_user.id, message.chat.id, message.from_user.username)
@@ -188,6 +213,22 @@ async def main() -> None:
             channel_id,
             telegram_source,
         ],
+    )
+    scheduler.add_job(
+        post_spotlight,
+        "cron",
+        day_of_week="wed",
+        hour=18,
+        minute=0,
+        args=[bot, client, signs, model, channel_id],
+    )
+    scheduler.add_job(
+        post_hook,
+        "cron",
+        day_of_week="sat",
+        hour=18,
+        minute=0,
+        args=[bot, client, model, channel_id],
     )
     scheduler.start()
 

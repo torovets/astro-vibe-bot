@@ -7,3 +7,6 @@ telethon.session-journal
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# Review artifacts (regenerate via test_render.py)
+samples/
