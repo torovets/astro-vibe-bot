@@ -7,7 +7,11 @@ from aiogram import Bot
 from aiogram.types import BufferedInputFile
 from zoneinfo import ZoneInfo
 
-from db import get_all_users, load_today_cover, save_today_cover
+from db import (
+    get_all_users,
+    load_today_background,
+    save_today_background,
+)
 from generation import get_or_generate_context
 
 logger = logging.getLogger(__name__)
@@ -87,36 +91,84 @@ def build_channel_sign_messages(
     return messages
 
 
+async def _get_daily_background(client, intro: str, today_key: str, force: bool) -> bytes:
+    """Return the raw AI background for the day, generating+caching once.
+
+    One image/day is reused for the cover and all 12 sign cards. force=True
+    regenerates it (and overwrites the cache).
+    """
+    import render  # local import: Pillow only needed when covers are used
+
+    background = None if force else load_today_background(today_key)
+    if background is None:
+        prompt = render.build_background_prompt(intro)
+        background = await render.generate_background(client, prompt)
+        save_today_background(today_key, background)
+    return background
+
+
 async def send_daily_cover(
     bot: Bot, client, channel_id: str, context: dict, today_key: str, force: bool = False
 ) -> bool:
     """Render+send the daily cover image. Returns True on success.
 
-    The cover carries the affirmation (title) and intro (body). Background is
-    cached per day so /broadcast_now retries do not re-pay the image API; pass
-    force=True to regenerate (e.g. to get a fresh background for the same day).
-    Never raises — returns False so the caller can fall back to text-only.
+    The cover carries the affirmation (title) and intro (body) on the shared
+    daily background (cached so retries don't re-pay the image API; force=True
+    regenerates). Never raises — returns False so the caller can fall back.
     """
-    import render  # local import: Pillow is only needed when covers are used
+    import render
 
     try:
         affirmation = context.get("affirmation", "")
         intro = context.get("global_summary", "")
-        png = None if force else load_today_cover(today_key)
-        if png is None:
-            prompt = render.build_background_prompt(intro)
-            background = await render.generate_background(client, prompt)
-            buf = render.render_card(affirmation, intro, background)
-            png = buf.getvalue()
-            save_today_cover(today_key, png)
+        background = await _get_daily_background(client, intro, today_key, force)
+        buf = render.render_card(affirmation, intro, background)
         await bot.send_photo(
             channel_id,
-            BufferedInputFile(png, filename="vibe.png"),
+            BufferedInputFile(buf.getvalue(), filename="vibe.png"),
         )
         return True
     except Exception as exc:  # noqa: BLE001 - cover must never block the broadcast
         logger.warning("Daily cover failed (%s); falling back to text intro", exc)
         return False
+
+
+async def send_sign_cards(
+    bot: Bot, client, channel_id: str, context: dict, signs: dict, today_key: str,
+    force: bool = False,
+) -> tuple[int, int] | None:
+    """Render+send one image card per sign on the shared daily background.
+
+    Returns (sent, failed) counts, or None if the background could not be
+    obtained at all (so the caller can fall back to text sign messages).
+    Per-card send failures are logged and counted, never raised.
+    """
+    import render
+
+    try:
+        intro = context.get("global_summary", "")
+        background = await _get_daily_background(client, intro, today_key, force)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Sign cards: background unavailable (%s); using text", exc)
+        return None
+
+    vibes = context.get("vibes", {})
+    sent = 0
+    failed = 0
+    for sign in signs:
+        vibe = vibes.get(sign, "Вайб формується. Перевір пізніше.")
+        try:
+            buf = render.render_sign_card(
+                SIGN_EMOJI.get(sign, "✨"), display_sign(sign), vibe, background
+            )
+            await bot.send_photo(
+                channel_id, BufferedInputFile(buf.getvalue(), filename=f"{sign}.png")
+            )
+            sent += 1
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            logger.warning("Failed to send sign card %s: %s", sign, exc)
+    return sent, failed
 
 
 async def broadcast_daily_vibes(
@@ -161,17 +213,22 @@ async def broadcast_daily_vibes(
     if channel_id:
         today_key = datetime.now(timezone).date().isoformat()
         cover_sent = await send_daily_cover(bot, client, channel_id, context, today_key)
-        # When the cover carries the intro, don't repeat it in the first sign post.
-        for channel_message in build_channel_sign_messages(
-            context, signs, include_intro=not cover_sent
-        ):
-            try:
-                await bot.send_message(channel_id, channel_message)
-                sent += 1
-            except Exception as exc:
-                failed += 1
-                logger.warning(
-                    "Failed to send to channel=%s: %s", channel_id, exc
-                )
+        cards = await send_sign_cards(bot, client, channel_id, context, signs, today_key)
+        if cards is None:
+            # Image pipeline down: fall back to text sign posts (intro included
+            # only if the cover image also failed, to avoid duplication).
+            for channel_message in build_channel_sign_messages(
+                context, signs, include_intro=not cover_sent
+            ):
+                try:
+                    await bot.send_message(channel_id, channel_message)
+                    sent += 1
+                except Exception as exc:
+                    failed += 1
+                    logger.warning("Failed to send to channel=%s: %s", channel_id, exc)
+        else:
+            card_sent, card_failed = cards
+            sent += card_sent
+            failed += card_failed
 
     logger.info("Broadcast complete: %d sent, %d failed", sent, failed)

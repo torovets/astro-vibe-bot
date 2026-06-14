@@ -36,7 +36,7 @@ def init_db() -> None:
         )
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS daily_cover (
+            CREATE TABLE IF NOT EXISTS daily_background (
                 date TEXT PRIMARY KEY,
                 png BLOB NOT NULL
             )
@@ -178,22 +178,22 @@ def next_subject(rubric: str, candidates: list[str]) -> str | None:
     return candidates[0]
 
 
-# --- Workstream D: daily cover image cache -----------------------------------
+# --- Workstream D: daily AI background cache (shared by cover + sign cards) ---
 
-def load_today_cover(today_key: str) -> bytes | None:
+def load_today_background(today_key: str) -> bytes | None:
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
-            "SELECT png FROM daily_cover WHERE date = ?",
+            "SELECT png FROM daily_background WHERE date = ?",
             (today_key,),
         ).fetchone()
     return row[0] if row else None
 
 
-def save_today_cover(today_key: str, png: bytes) -> None:
+def save_today_background(today_key: str, png: bytes) -> None:
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """
-            INSERT INTO daily_cover (date, png)
+            INSERT INTO daily_background (date, png)
             VALUES (?, ?)
             ON CONFLICT(date) DO UPDATE SET png = excluded.png
             """,
