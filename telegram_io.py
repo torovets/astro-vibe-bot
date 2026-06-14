@@ -88,12 +88,13 @@ def build_channel_sign_messages(
 
 
 async def send_daily_cover(
-    bot: Bot, client, channel_id: str, context: dict, today_key: str
+    bot: Bot, client, channel_id: str, context: dict, today_key: str, force: bool = False
 ) -> bool:
     """Render+send the daily cover image. Returns True on success.
 
     The cover carries the affirmation (title) and intro (body). Background is
-    cached per day so /broadcast_now retries do not re-pay the image API.
+    cached per day so /broadcast_now retries do not re-pay the image API; pass
+    force=True to regenerate (e.g. to get a fresh background for the same day).
     Never raises — returns False so the caller can fall back to text-only.
     """
     import render  # local import: Pillow is only needed when covers are used
@@ -101,7 +102,7 @@ async def send_daily_cover(
     try:
         affirmation = context.get("affirmation", "")
         intro = context.get("global_summary", "")
-        png = load_today_cover(today_key)
+        png = None if force else load_today_cover(today_key)
         if png is None:
             prompt = render.build_background_prompt(intro)
             background = await render.generate_background(client, prompt)
