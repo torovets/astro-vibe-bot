@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F
@@ -30,6 +31,7 @@ from telegram_io import (
     display_sign_with_emoji,
     load_signs,
     normalize_sign,
+    send_daily_cover,
 )
 
 logger = logging.getLogger(__name__)
@@ -142,9 +144,14 @@ async def main() -> None:
             timezone,
             telegram_source=telegram_source,
         )
-        for channel_message in build_channel_sign_messages(context, signs):
+        today_key = datetime.now(timezone).date().isoformat()
+        cover_sent = await send_daily_cover(bot, client, channel_id, context, today_key)
+        for channel_message in build_channel_sign_messages(
+            context, signs, include_intro=not cover_sent
+        ):
             await bot.send_message(channel_id, channel_message)
-        await message.answer("Надіслано в канал.")
+        status = "з обкладинкою" if cover_sent else "без обкладинки (див. лог)"
+        await message.answer(f"Надіслано в канал ({status}).")
 
     @dp.message(Command("post_spotlight"))
     async def handle_post_spotlight(message: Message) -> None:
