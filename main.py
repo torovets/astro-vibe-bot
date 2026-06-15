@@ -55,7 +55,7 @@ async def main() -> None:
     openai_key = os.getenv("OPENAI_API_KEY")
     rss_url = os.getenv("RSS_FEED_URL")
     timezone_name = os.getenv("TIMEZONE", "UTC")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
     channel_id = os.getenv("BROADCAST_CHANNEL")
     admin_ids = parse_admin_ids(os.getenv("ADMIN_USER_IDS"))
     telegram_api_id = os.getenv("TELEGRAM_API_ID")

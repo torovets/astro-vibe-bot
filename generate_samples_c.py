@@ -13,7 +13,7 @@ import rubrics
 from db import init_db
 from telegram_io import load_signs
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 
 
 async def main():
