@@ -101,7 +101,10 @@ async def _get_daily_background(client, intro: str, today_key: str, force: bool)
 
     background = None if force else load_today_background(today_key)
     if background is None:
-        prompt = render.build_background_prompt(intro)
+        # Seed the look with the date so each day differs; when force-regenerating
+        # within the same day, add entropy so /post_cover yields a new background.
+        seed = today_key if not force else f"{today_key}-{datetime.now().timestamp()}"
+        prompt = render.build_background_prompt(intro, day_seed=seed)
         background = await render.generate_background(client, prompt)
         save_today_background(today_key, background)
     return background
