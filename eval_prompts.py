@@ -22,7 +22,7 @@ from openai import AsyncOpenAI
 from generation import _first_word, build_channel_system, generate_daily_context
 from telegram_io import display_sign_with_emoji, load_signs
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-mini")
 
 NEWS_FIXTURES = {
     "День 1": (
