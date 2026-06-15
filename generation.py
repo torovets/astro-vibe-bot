@@ -57,6 +57,73 @@ def _needs_variety_retry(vibes: dict) -> bool:
     most_common = Counter(first_words).most_common(1)[0][1]
     return most_common / len(first_words) > 0.30
 
+
+# --- Safety guard (war sensitivity) ------------------------------------------
+# This is a Ukrainian channel during wartime. Content must NEVER reference, joke
+# about, or aestheticize war, explosions, shelling, air-raid alerts, casualties
+# or destruction — not even ironically. The system prompt forbids it, but a
+# single bad generation must never reach the channel, so we also enforce it in
+# code: scan output, regenerate once with a hard correction, and as a last
+# resort scrub offending text with a neutral fallback.
+UNSAFE_TERMS = [
+    "вибух", "обстріл", "обстрел", "ракет", "дрон", "шахед", "бомб", "снаряд",
+    "зруйнов", "руїн", "тривог", "сирен", "жертв", "загибл", "загину",
+    "поранен", "окуп", "війн", "война", "war", "евакуа",
+]
+_UNSAFE_RE = re.compile("|".join(UNSAFE_TERMS), re.IGNORECASE)
+
+SAFE_FALLBACK_INTRO = "Бережіть себе й тих, хто поруч. Нехай цей день буде добрим до вас."
+SAFE_FALLBACK_VIBE = (
+    "Гарний день, щоб подбати про себе й близьких — маленька турбота "
+    "повертається сторицею."
+)
+SAFETY_CORRECTION = (
+    "СТОП. У тексті є згадки про війну, вибухи, обстріли, повітряні тривоги, "
+    "жертви чи руйнування — або іронія на цю тему. Це категорично заборонено. "
+    "Повністю ІГНОРУЙ будь-які новини про війну/вибухи/обстріли/тривоги/жертви/"
+    "руйнування — не згадуй і не обігруй їх навіть жартома. Пиши лише про "
+    "нейтральні побутові теми (погода, культура, робота, стосунки, спорт, "
+    "технології, повсякдення). Перепиши JSON у тому ж форматі. Лише JSON."
+)
+
+
+def _contains_unsafe(text: str) -> bool:
+    return bool(text) and bool(_UNSAFE_RE.search(text))
+
+
+def _filter_news(blob: str) -> str:
+    """Drop war/tragedy items so they never become 'fuel' for the model."""
+    if not blob:
+        return blob
+    safe_lines = [ln for ln in blob.splitlines() if not _contains_unsafe(ln)]
+    removed = blob.count("\n") + 1 - len(safe_lines)
+    if removed > 0:
+        logger.info("Filtered %d unsafe news item(s) before generation.", removed)
+    return "\n".join(safe_lines)
+
+
+def _payload_has_unsafe(payload: dict) -> bool:
+    fields = [payload.get("affirmation", ""), payload.get("global_summary", "")]
+    fields += list((payload.get("vibes") or {}).values())
+    return any(_contains_unsafe(t) for t in fields)
+
+
+def _scrub_context(context: dict) -> dict:
+    """Last-resort scrub: replace any still-unsafe field with a neutral fallback."""
+    if _contains_unsafe(context.get("global_summary", "")):
+        logger.warning("Safety scrub: replacing unsafe intro with fallback.")
+        context["global_summary"] = SAFE_FALLBACK_INTRO
+    if _contains_unsafe(context.get("affirmation", "")):
+        logger.warning("Safety scrub: dropping unsafe affirmation.")
+        context["affirmation"] = ""
+    vibes = context.get("vibes", {})
+    for sign, vibe in list(vibes.items()):
+        if _contains_unsafe(vibe):
+            logger.warning("Safety scrub: replacing unsafe vibe for %s.", sign)
+            vibes[sign] = SAFE_FALLBACK_VIBE
+    return context
+
+
 _OPENAI_ERRORS = (
     openai.APIError,
     openai.APITimeoutError,
@@ -124,6 +191,7 @@ async def generate_daily_context(
 ) -> dict:
     if news_blob is None:
         news_blob = await fetch_news_blob(rss_url, telegram_source=telegram_source)
+    news_blob = _filter_news(news_blob)
 
     signs_payload = {
         sign: {
@@ -181,6 +249,23 @@ async def generate_daily_context(
         except Exception as exc:
             logger.warning("Variety retry failed: %s", exc)
 
+    # Safety guard: never reference war/tragedy. Regenerate once if violated.
+    if _payload_has_unsafe(payload):
+        logger.warning("Safety guard triggered (war/tragedy content); regenerating.")
+        safety_messages = messages + [
+            {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)},
+            {"role": "user", "content": SAFETY_CORRECTION},
+        ]
+        try:
+            retried = await complete_json(
+                client, model, messages=safety_messages, temperature=0.6
+            )
+            if retried.get("vibes"):
+                payload = retried
+                vibes = retried.get("vibes", {}) or {}
+        except Exception as exc:
+            logger.warning("Safety regeneration failed: %s", exc)
+
     missing = [sign for sign in signs.keys() if sign not in vibes or not vibes[sign]]
     if missing:
         logger.warning(
@@ -205,27 +290,40 @@ async def generate_daily_context(
             raw_global_summary=raw_global_summary,
             yesterday_hint=yesterday_hint,
         )
+        intro_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": summary_user_prompt},
+        ]
         try:
             polished_summary = await complete_text(
-                client,
-                model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": summary_user_prompt},
-                ],
-                temperature=0.7,
+                client, model, messages=intro_messages, temperature=0.7
             )
+            # Safety guard on the intro (this is what lands on the cover image).
+            if _contains_unsafe(polished_summary):
+                logger.warning("Safety guard triggered on intro; regenerating.")
+                polished_summary = await complete_text(
+                    client,
+                    model,
+                    messages=intro_messages
+                    + [
+                        {"role": "assistant", "content": polished_summary},
+                        {"role": "user", "content": SAFETY_CORRECTION},
+                    ],
+                    temperature=0.6,
+                )
         except Exception as exc:
             logger.warning("Intro polish failed after retries: %s", exc)
             polished_summary = raw_global_summary
     else:
         polished_summary = raw_global_summary
 
-    return {
+    context = {
         "affirmation": payload.get("affirmation", ""),
         "global_summary": polished_summary,
         "vibes": vibes,
     }
+    # Final hard backstop: nothing unsafe is ever returned/cached/published.
+    return _scrub_context(context)
 
 
 async def get_or_generate_context(
