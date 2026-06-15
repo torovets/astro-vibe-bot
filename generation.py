@@ -59,13 +59,13 @@ def _needs_variety_retry(vibes: dict) -> bool:
 
 
 # --- Dignity guard (war sensitivity, NOT topic filtering) --------------------
-# This is a wartime Ukrainian channel. War / difficult news is welcome material —
-# it should be engaged with dignity, warmth and optimism, emphasizing Ukrainian
-# resilience ("незламність"). What is forbidden is the *treatment*: irony, jokes,
-# trivializing or aestheticizing war, explosions, casualties or destruction.
-# Keyword matching can't tell respectful from flippant, so keywords only act as a
-# trigger: when a sensitive topic appears, an LLM judge checks the tone, and we
-# regenerate (or, as a last resort, swap in a supportive line) if it's mocking.
+# Wartime Ukrainian channel. War news is welcome material, with nuance:
+#   * strikes on Russian military/infrastructure targets (oil depots, plants) MAY
+#     be played up positively/playfully — it's good news for morale;
+#   * attacks on Ukraine and our losses are engaged only with dignity + hope;
+#   * human casualties / deaths (ANY side) are NEVER a punchline.
+# Keyword matching can't tell respectful from flippant, so an LLM judge checks the
+# tone; we regenerate, or as a last resort swap in a supportive line, if it mocks.
 SENSITIVE_TERMS = [
     "вибух", "обстріл", "обстрел", "ракет", "дрон", "шахед", "бомб", "снаряд",
     "зруйнов", "руїн", "тривог", "сирен", "жертв", "загибл", "загину",
@@ -82,10 +82,12 @@ SUPPORTIVE_VIBE = (
     "підтримуй близьких і вір у краще."
 )
 RESPECT_CORRECTION = (
-    "У тексті є іронія, жарт або легковажність щодо війни/вибухів/обстрілів/"
-    "жертв/руйнувань. Це неприпустимо. Перепиши JSON: важкі теми МОЖНА згадувати, "
-    "але ЛИШЕ з гідністю, теплом і оптимізмом, підкреслюючи незламність українців "
-    "і надію — без сарказму, жартів і знецінення. Легкі побутові теми лиши "
+    "У тексті є неприпустимий жарт чи знецінення людських жертв/смертей/"
+    "страждань, або легковажність щодо атак на Україну. Перепиши JSON за "
+    "правилами: удари по російських військових/інфраструктурних цілях (нафтобази, "
+    "заводи) можна обігрувати позитивно й з азартом; атаки на Україну та наші "
+    "втрати — лише з гідністю, теплом і вірою в незламність; НІКОЛИ не жартуй над "
+    "людськими жертвами чи смертями з будь-якого боку. Легкі побутові теми лиши "
     "дотепними. Той самий формат. Лише JSON."
 )
 
@@ -101,12 +103,20 @@ async def _judge_respectful(client: AsyncOpenAI, model: str, context: dict) -> b
         + list((context.get("vibes") or {}).values())
     )
     judge_prompt = (
-        "Це тексти україномовного зодіак-каналу воєнного часу. Чи є ДЕ-НЕБУДЬ "
-        "іронія, сарказм, жарт, легковажність, знецінення або естетизація війни, "
-        "вибухів, обстрілів, жертв, поранених чи руйнувань? Згадка з гідністю, "
-        "підтримкою й оптимізмом (незламність, надія) — це ДОПУСТИМО. Глузування "
-        'чи легковажність щодо трагедії — НЕДОПУСТИМО. Поверни JSON '
-        '{"respectful": true/false}.\n\nТексти:\n' + listing
+        "Ти модеруєш україномовний зодіак-канал воєнного часу. Постав respectful=false "
+        "ЛИШЕ якщо є насмішка/знецінення ЛЮДСЬКИХ жертв, смертей, поранених чи "
+        "похоронів (з будь-якого боку), АБО іронія/знущання над стражданнями "
+        "українців чи атаками на Україну.\n"
+        "Інакше respectful=true. Зокрема, ДОПУСТИМО (respectful=true):\n"
+        "- азартне/жартівливе обігрування ударів по російській техніці чи "
+        "інфраструктурі (нафтобази, заводи, склади), якщо НЕ йдеться про людські "
+        "смерті. Приклад: «Нехай твоя пристрасть палає, як російські нафтобази» = "
+        "respectful=true;\n"
+        "- згадка атак на Україну з гідністю й вірою в незламність. Приклад: «Ніч "
+        "була неспокійною, але ми незламні» = respectful=true.\n"
+        "НЕДОПУСТимо (respectful=false). Приклади: жарт над загиблими = false; "
+        "«фоткайтесь на тлі зруйнованих будівель Києва» = false.\n"
+        'Поверни лише JSON {"respectful": true/false}.\n\nТексти:\n' + listing
     )
     try:
         resp = await complete_json(
