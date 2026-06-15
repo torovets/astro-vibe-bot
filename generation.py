@@ -57,6 +57,94 @@ def _needs_variety_retry(vibes: dict) -> bool:
     most_common = Counter(first_words).most_common(1)[0][1]
     return most_common / len(first_words) > 0.30
 
+
+# --- Dignity guard (war sensitivity, NOT topic filtering) --------------------
+# Wartime Ukrainian channel. War news is welcome material, with nuance:
+#   * strikes on Russian military/infrastructure targets (oil depots, plants) MAY
+#     be played up positively/playfully — it's good news for morale;
+#   * attacks on Ukraine and our losses are engaged only with dignity + hope;
+#   * human casualties / deaths (ANY side) are NEVER a punchline.
+# Keyword matching can't tell respectful from flippant, so an LLM judge checks the
+# tone; we regenerate, or as a last resort swap in a supportive line, if it mocks.
+SENSITIVE_TERMS = [
+    "вибух", "обстріл", "обстрел", "ракет", "дрон", "шахед", "бомб", "снаряд",
+    "зруйнов", "руїн", "тривог", "сирен", "жертв", "загибл", "загину",
+    "поранен", "окуп", "війн", "война", "war", "евакуа",
+]
+_SENSITIVE_RE = re.compile("|".join(SENSITIVE_TERMS), re.IGNORECASE)
+
+SUPPORTIVE_INTRO = (
+    "День може бути непростим, та українці незламні. Бережіть себе й тримайтеся "
+    "разом — попереду світло."
+)
+SUPPORTIVE_VIBE = (
+    "Навіть у складні дні твоя сила нікуди не зникає. Ми незламні — тримайся, "
+    "підтримуй близьких і вір у краще."
+)
+RESPECT_CORRECTION = (
+    "У тексті є неприпустимий жарт чи знецінення людських жертв/смертей/"
+    "страждань, або легковажність щодо атак на Україну. Перепиши JSON за "
+    "правилами: удари по російських військових/інфраструктурних цілях (нафтобази, "
+    "заводи) можна обігрувати позитивно й з азартом; атаки на Україну та наші "
+    "втрати — лише з гідністю, теплом і вірою в незламність; НІКОЛИ не жартуй над "
+    "людськими жертвами чи смертями з будь-якого боку. Легкі побутові теми лиши "
+    "дотепними. Той самий формат. Лише JSON."
+)
+
+
+def _mentions_sensitive(text: str) -> bool:
+    return bool(text) and bool(_SENSITIVE_RE.search(text))
+
+
+async def _judge_respectful(client: AsyncOpenAI, model: str, context: dict) -> bool:
+    """LLM check: True if difficult topics are handled with dignity, not mockery."""
+    listing = "\n".join(
+        [context.get("global_summary", ""), context.get("affirmation", "")]
+        + list((context.get("vibes") or {}).values())
+    )
+    judge_prompt = (
+        "Ти модеруєш україномовний зодіак-канал воєнного часу. Постав respectful=false "
+        "ЛИШЕ якщо є насмішка/знецінення ЛЮДСЬКИХ жертв, смертей, поранених чи "
+        "похоронів (з будь-якого боку), АБО іронія/знущання над стражданнями "
+        "українців чи атаками на Україну.\n"
+        "Інакше respectful=true. Зокрема, ДОПУСТИМО (respectful=true):\n"
+        "- азартне/жартівливе обігрування ударів по російській техніці чи "
+        "інфраструктурі (нафтобази, заводи, склади), якщо НЕ йдеться про людські "
+        "смерті. Приклад: «Нехай твоя пристрасть палає, як російські нафтобази» = "
+        "respectful=true;\n"
+        "- згадка атак на Україну з гідністю й вірою в незламність. Приклад: «Ніч "
+        "була неспокійною, але ми незламні» = respectful=true.\n"
+        "НЕДОПУСТимо (respectful=false). Приклади: жарт над загиблими = false; "
+        "«фоткайтесь на тлі зруйнованих будівель Києва» = false.\n"
+        'Поверни лише JSON {"respectful": true/false}.\n\nТексти:\n' + listing
+    )
+    try:
+        resp = await complete_json(
+            client, model,
+            messages=[{"role": "user", "content": judge_prompt}],
+            temperature=0,
+        )
+        return bool(resp.get("respectful", True))
+    except Exception as exc:  # noqa: BLE001 - don't nuke good content on a flake
+        logger.warning("Respect judge failed (%s); assuming respectful", exc)
+        return True
+
+
+def _scrub_disrespectful(context: dict) -> dict:
+    """Last resort: swap sensitive-topic fields for supportive resilience lines."""
+    if _mentions_sensitive(context.get("global_summary", "")):
+        logger.warning("Dignity scrub: replacing intro with supportive fallback.")
+        context["global_summary"] = SUPPORTIVE_INTRO
+    if _mentions_sensitive(context.get("affirmation", "")):
+        context["affirmation"] = ""
+    vibes = context.get("vibes", {})
+    for sign, vibe in list(vibes.items()):
+        if _mentions_sensitive(vibe):
+            logger.warning("Dignity scrub: replacing vibe for %s.", sign)
+            vibes[sign] = SUPPORTIVE_VIBE
+    return context
+
+
 _OPENAI_ERRORS = (
     openai.APIError,
     openai.APITimeoutError,
@@ -205,15 +293,13 @@ async def generate_daily_context(
             raw_global_summary=raw_global_summary,
             yesterday_hint=yesterday_hint,
         )
+        intro_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": summary_user_prompt},
+        ]
         try:
             polished_summary = await complete_text(
-                client,
-                model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": summary_user_prompt},
-                ],
-                temperature=0.7,
+                client, model, messages=intro_messages, temperature=0.7
             )
         except Exception as exc:
             logger.warning("Intro polish failed after retries: %s", exc)
@@ -221,11 +307,42 @@ async def generate_daily_context(
     else:
         polished_summary = raw_global_summary
 
-    return {
+    context = {
         "affirmation": payload.get("affirmation", ""),
         "global_summary": polished_summary,
         "vibes": vibes,
     }
+
+    # Dignity guard: difficult topics are welcome, but only handled with respect
+    # and optimism (resilience, hope) — never irony or mockery. Runs once on every
+    # daily generation because resilient/flippant phrasing doesn't always contain
+    # the trigger keywords. If the treatment is disrespectful, regenerate once;
+    # if still off, swap any keyword-bearing field for a supportive resilience line.
+    if not await _judge_respectful(client, model, context):
+        logger.warning("Dignity guard triggered; regenerating with respect correction.")
+        try:
+            retried = await complete_json(
+                client,
+                model,
+                messages=messages
+                + [
+                    {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)},
+                    {"role": "user", "content": RESPECT_CORRECTION},
+                ],
+                temperature=0.7,
+            )
+            if retried.get("vibes"):
+                context = {
+                    "affirmation": retried.get("affirmation", ""),
+                    "global_summary": retried.get("global_summary", polished_summary),
+                    "vibes": retried.get("vibes", {}) or vibes,
+                }
+        except Exception as exc:
+            logger.warning("Respect regeneration failed: %s", exc)
+        if not await _judge_respectful(client, model, context):
+            context = _scrub_disrespectful(context)
+
+    return context
 
 
 async def get_or_generate_context(

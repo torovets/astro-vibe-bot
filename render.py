@@ -5,6 +5,7 @@ drawn locally with Pillow because image models render Cyrillic unreliably.
 """
 
 import base64
+import hashlib
 import io
 import logging
 import os
@@ -22,13 +23,51 @@ FONT_SYMBOL = os.path.join(FONTS_DIR, "DejaVuSans.ttf")
 
 CARD_SIZE = (1080, 1350)  # Telegram portrait 4:5
 
+# Day-over-day variety: a fixed prompt produces the same aesthetic every day, so
+# we rotate palette + texture deterministically from a per-day seed. Distinct
+# adjacent seeds (e.g. ISO dates) hash to unrelated indices, so consecutive days
+# look clearly different while a given day stays stable (and cache-friendly).
+_PALETTES = [
+    "warm gold and soft rose sunrise",
+    "deep indigo night with teal highlights",
+    "lavender and dusty-rose dusk",
+    "emerald and aquamarine aurora",
+    "amber and crimson autumn glow",
+    "icy blue and silver winter light",
+    "violet and magenta nebula",
+    "soft sage-green and cream",
+    "peach and coral morning haze",
+    "midnight blue with golden stars",
+    "turquoise and pearl dawn",
+    "burgundy and plum twilight",
+]
+_TEXTURES = [
+    "dreamy cosmic haze with subtle stars and light bokeh",
+    "soft watercolour gradients",
+    "painterly oil-brush clouds",
+    "starry nebula with faint constellations",
+    "misty layered mountain silhouettes",
+    "smooth silk-like flowing gradients",
+    "gentle aurora ribbons across the sky",
+]
 
-def build_background_prompt(global_summary: str, mood_hint: str = "") -> str:
-    """Short ENGLISH prompt for the image model. Always forbids any text."""
+
+def build_background_prompt(
+    global_summary: str = "", day_seed: str = "", mood_hint: str = ""
+) -> str:
+    """Short ENGLISH prompt for the image model, varied per day. Forbids any text.
+
+    palette/texture are chosen from a hash of day_seed (falls back to the
+    summary) so each day gets a distinct look while staying deterministic.
+    """
+    basis = day_seed or global_summary or "default"
+    h = int(hashlib.sha1(basis.encode("utf-8")).hexdigest(), 16)
+    palette = _PALETTES[h % len(_PALETTES)]
+    texture = _TEXTURES[(h // len(_PALETTES)) % len(_TEXTURES)]
     base = (
-        "Abstract atmospheric celestial background, soft gradients, dreamy cosmic "
-        "haze, gentle warm and deep-blue palette, subtle stars and light bokeh, "
-        "elegant editorial poster aesthetic, painterly, high quality"
+        f"Abstract atmospheric celestial poster background, {texture}, "
+        f"{palette} colour palette, elegant editorial aesthetic, painterly, "
+        f"high quality, vertical composition"
     )
     if mood_hint:
         base += f", mood: {mood_hint}"
