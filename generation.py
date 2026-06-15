@@ -58,69 +58,80 @@ def _needs_variety_retry(vibes: dict) -> bool:
     return most_common / len(first_words) > 0.30
 
 
-# --- Safety guard (war sensitivity) ------------------------------------------
-# This is a Ukrainian channel during wartime. Content must NEVER reference, joke
-# about, or aestheticize war, explosions, shelling, air-raid alerts, casualties
-# or destruction — not even ironically. The system prompt forbids it, but a
-# single bad generation must never reach the channel, so we also enforce it in
-# code: scan output, regenerate once with a hard correction, and as a last
-# resort scrub offending text with a neutral fallback.
-UNSAFE_TERMS = [
+# --- Dignity guard (war sensitivity, NOT topic filtering) --------------------
+# This is a wartime Ukrainian channel. War / difficult news is welcome material —
+# it should be engaged with dignity, warmth and optimism, emphasizing Ukrainian
+# resilience ("незламність"). What is forbidden is the *treatment*: irony, jokes,
+# trivializing or aestheticizing war, explosions, casualties or destruction.
+# Keyword matching can't tell respectful from flippant, so keywords only act as a
+# trigger: when a sensitive topic appears, an LLM judge checks the tone, and we
+# regenerate (or, as a last resort, swap in a supportive line) if it's mocking.
+SENSITIVE_TERMS = [
     "вибух", "обстріл", "обстрел", "ракет", "дрон", "шахед", "бомб", "снаряд",
     "зруйнов", "руїн", "тривог", "сирен", "жертв", "загибл", "загину",
     "поранен", "окуп", "війн", "война", "war", "евакуа",
 ]
-_UNSAFE_RE = re.compile("|".join(UNSAFE_TERMS), re.IGNORECASE)
+_SENSITIVE_RE = re.compile("|".join(SENSITIVE_TERMS), re.IGNORECASE)
 
-SAFE_FALLBACK_INTRO = "Бережіть себе й тих, хто поруч. Нехай цей день буде добрим до вас."
-SAFE_FALLBACK_VIBE = (
-    "Гарний день, щоб подбати про себе й близьких — маленька турбота "
-    "повертається сторицею."
+SUPPORTIVE_INTRO = (
+    "День може бути непростим, та українці незламні. Бережіть себе й тримайтеся "
+    "разом — попереду світло."
 )
-SAFETY_CORRECTION = (
-    "СТОП. У тексті є згадки про війну, вибухи, обстріли, повітряні тривоги, "
-    "жертви чи руйнування — або іронія на цю тему. Це категорично заборонено. "
-    "Повністю ІГНОРУЙ будь-які новини про війну/вибухи/обстріли/тривоги/жертви/"
-    "руйнування — не згадуй і не обігруй їх навіть жартома. Пиши лише про "
-    "нейтральні побутові теми (погода, культура, робота, стосунки, спорт, "
-    "технології, повсякдення). Перепиши JSON у тому ж форматі. Лише JSON."
+SUPPORTIVE_VIBE = (
+    "Навіть у складні дні твоя сила нікуди не зникає. Ми незламні — тримайся, "
+    "підтримуй близьких і вір у краще."
+)
+RESPECT_CORRECTION = (
+    "У тексті є іронія, жарт або легковажність щодо війни/вибухів/обстрілів/"
+    "жертв/руйнувань. Це неприпустимо. Перепиши JSON: важкі теми МОЖНА згадувати, "
+    "але ЛИШЕ з гідністю, теплом і оптимізмом, підкреслюючи незламність українців "
+    "і надію — без сарказму, жартів і знецінення. Легкі побутові теми лиши "
+    "дотепними. Той самий формат. Лише JSON."
 )
 
 
-def _contains_unsafe(text: str) -> bool:
-    return bool(text) and bool(_UNSAFE_RE.search(text))
+def _mentions_sensitive(text: str) -> bool:
+    return bool(text) and bool(_SENSITIVE_RE.search(text))
 
 
-def _filter_news(blob: str) -> str:
-    """Drop war/tragedy items so they never become 'fuel' for the model."""
-    if not blob:
-        return blob
-    safe_lines = [ln for ln in blob.splitlines() if not _contains_unsafe(ln)]
-    removed = blob.count("\n") + 1 - len(safe_lines)
-    if removed > 0:
-        logger.info("Filtered %d unsafe news item(s) before generation.", removed)
-    return "\n".join(safe_lines)
+async def _judge_respectful(client: AsyncOpenAI, model: str, context: dict) -> bool:
+    """LLM check: True if difficult topics are handled with dignity, not mockery."""
+    listing = "\n".join(
+        [context.get("global_summary", ""), context.get("affirmation", "")]
+        + list((context.get("vibes") or {}).values())
+    )
+    judge_prompt = (
+        "Це тексти україномовного зодіак-каналу воєнного часу. Чи є ДЕ-НЕБУДЬ "
+        "іронія, сарказм, жарт, легковажність, знецінення або естетизація війни, "
+        "вибухів, обстрілів, жертв, поранених чи руйнувань? Згадка з гідністю, "
+        "підтримкою й оптимізмом (незламність, надія) — це ДОПУСТИМО. Глузування "
+        'чи легковажність щодо трагедії — НЕДОПУСТИМО. Поверни JSON '
+        '{"respectful": true/false}.\n\nТексти:\n' + listing
+    )
+    try:
+        resp = await complete_json(
+            client, model,
+            messages=[{"role": "user", "content": judge_prompt}],
+            temperature=0,
+        )
+        return bool(resp.get("respectful", True))
+    except Exception as exc:  # noqa: BLE001 - don't nuke good content on a flake
+        logger.warning("Respect judge failed (%s); assuming respectful", exc)
+        return True
 
 
-def _payload_has_unsafe(payload: dict) -> bool:
-    fields = [payload.get("affirmation", ""), payload.get("global_summary", "")]
-    fields += list((payload.get("vibes") or {}).values())
-    return any(_contains_unsafe(t) for t in fields)
-
-
-def _scrub_context(context: dict) -> dict:
-    """Last-resort scrub: replace any still-unsafe field with a neutral fallback."""
-    if _contains_unsafe(context.get("global_summary", "")):
-        logger.warning("Safety scrub: replacing unsafe intro with fallback.")
-        context["global_summary"] = SAFE_FALLBACK_INTRO
-    if _contains_unsafe(context.get("affirmation", "")):
-        logger.warning("Safety scrub: dropping unsafe affirmation.")
+def _scrub_disrespectful(context: dict) -> dict:
+    """Last resort: swap sensitive-topic fields for supportive resilience lines."""
+    if _mentions_sensitive(context.get("global_summary", "")):
+        logger.warning("Dignity scrub: replacing intro with supportive fallback.")
+        context["global_summary"] = SUPPORTIVE_INTRO
+    if _mentions_sensitive(context.get("affirmation", "")):
         context["affirmation"] = ""
     vibes = context.get("vibes", {})
     for sign, vibe in list(vibes.items()):
-        if _contains_unsafe(vibe):
-            logger.warning("Safety scrub: replacing unsafe vibe for %s.", sign)
-            vibes[sign] = SAFE_FALLBACK_VIBE
+        if _mentions_sensitive(vibe):
+            logger.warning("Dignity scrub: replacing vibe for %s.", sign)
+            vibes[sign] = SUPPORTIVE_VIBE
     return context
 
 
@@ -191,7 +202,6 @@ async def generate_daily_context(
 ) -> dict:
     if news_blob is None:
         news_blob = await fetch_news_blob(rss_url, telegram_source=telegram_source)
-    news_blob = _filter_news(news_blob)
 
     signs_payload = {
         sign: {
@@ -249,23 +259,6 @@ async def generate_daily_context(
         except Exception as exc:
             logger.warning("Variety retry failed: %s", exc)
 
-    # Safety guard: never reference war/tragedy. Regenerate once if violated.
-    if _payload_has_unsafe(payload):
-        logger.warning("Safety guard triggered (war/tragedy content); regenerating.")
-        safety_messages = messages + [
-            {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)},
-            {"role": "user", "content": SAFETY_CORRECTION},
-        ]
-        try:
-            retried = await complete_json(
-                client, model, messages=safety_messages, temperature=0.6
-            )
-            if retried.get("vibes"):
-                payload = retried
-                vibes = retried.get("vibes", {}) or {}
-        except Exception as exc:
-            logger.warning("Safety regeneration failed: %s", exc)
-
     missing = [sign for sign in signs.keys() if sign not in vibes or not vibes[sign]]
     if missing:
         logger.warning(
@@ -298,19 +291,6 @@ async def generate_daily_context(
             polished_summary = await complete_text(
                 client, model, messages=intro_messages, temperature=0.7
             )
-            # Safety guard on the intro (this is what lands on the cover image).
-            if _contains_unsafe(polished_summary):
-                logger.warning("Safety guard triggered on intro; regenerating.")
-                polished_summary = await complete_text(
-                    client,
-                    model,
-                    messages=intro_messages
-                    + [
-                        {"role": "assistant", "content": polished_summary},
-                        {"role": "user", "content": SAFETY_CORRECTION},
-                    ],
-                    temperature=0.6,
-                )
         except Exception as exc:
             logger.warning("Intro polish failed after retries: %s", exc)
             polished_summary = raw_global_summary
@@ -322,8 +302,37 @@ async def generate_daily_context(
         "global_summary": polished_summary,
         "vibes": vibes,
     }
-    # Final hard backstop: nothing unsafe is ever returned/cached/published.
-    return _scrub_context(context)
+
+    # Dignity guard: difficult topics are welcome, but only handled with respect
+    # and optimism (resilience, hope) — never irony or mockery. Runs once on every
+    # daily generation because resilient/flippant phrasing doesn't always contain
+    # the trigger keywords. If the treatment is disrespectful, regenerate once;
+    # if still off, swap any keyword-bearing field for a supportive resilience line.
+    if not await _judge_respectful(client, model, context):
+        logger.warning("Dignity guard triggered; regenerating with respect correction.")
+        try:
+            retried = await complete_json(
+                client,
+                model,
+                messages=messages
+                + [
+                    {"role": "assistant", "content": json.dumps(payload, ensure_ascii=False)},
+                    {"role": "user", "content": RESPECT_CORRECTION},
+                ],
+                temperature=0.7,
+            )
+            if retried.get("vibes"):
+                context = {
+                    "affirmation": retried.get("affirmation", ""),
+                    "global_summary": retried.get("global_summary", polished_summary),
+                    "vibes": retried.get("vibes", {}) or vibes,
+                }
+        except Exception as exc:
+            logger.warning("Respect regeneration failed: %s", exc)
+        if not await _judge_respectful(client, model, context):
+            context = _scrub_disrespectful(context)
+
+    return context
 
 
 async def get_or_generate_context(
