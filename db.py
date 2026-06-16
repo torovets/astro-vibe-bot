@@ -134,6 +134,32 @@ def load_recent_intros(n_days: int = 3) -> list[str]:
     return intros
 
 
+def load_recent_vibes(n_days: int = 2) -> dict[str, list[str]]:
+    """Return recent days' vibe text per English sign key, newest first.
+
+    Used to feed each sign's recent forecast back into generation so the same
+    sign doesn't repeat its theme/opener day over day. Empty when no history.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT context_json FROM daily_context ORDER BY date DESC LIMIT ?",
+                (n_days,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+    out: dict[str, list[str]] = {}
+    for (raw,) in rows:
+        try:
+            vibes = json.loads(raw).get("vibes", {}) or {}
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        for sign, text in vibes.items():
+            if text:
+                out.setdefault(sign, []).append(text)
+    return out
+
+
 # --- Workstream C: rubric rotation -------------------------------------------
 
 def record_rubric(rubric: str, subject: str, date_key: str | None = None) -> None:
