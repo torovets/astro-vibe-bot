@@ -2,7 +2,11 @@ import json
 import os
 import sqlite3
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
+# DB location is configurable so it can live on a persistent disk in production.
+# On Render the app directory is ephemeral (wiped each deploy); set DATABASE_PATH
+# to a path on the mounted disk (e.g. /var/data/data.db) so forecasts, users and
+# rubric rotation survive restarts/deploys. Falls back to a local file for dev.
+DB_PATH = os.getenv("DATABASE_PATH") or os.path.join(os.path.dirname(__file__), "data.db")
 
 
 def init_db() -> None:
@@ -132,6 +136,32 @@ def load_recent_intros(n_days: int = 3) -> list[str]:
         if summary:
             intros.append(summary)
     return intros
+
+
+def load_recent_vibes(n_days: int = 2) -> dict[str, list[str]]:
+    """Return recent days' vibe text per English sign key, newest first.
+
+    Used to feed each sign's recent forecast back into generation so the same
+    sign doesn't repeat its theme/opener day over day. Empty when no history.
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        try:
+            rows = conn.execute(
+                "SELECT context_json FROM daily_context ORDER BY date DESC LIMIT ?",
+                (n_days,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+    out: dict[str, list[str]] = {}
+    for (raw,) in rows:
+        try:
+            vibes = json.loads(raw).get("vibes", {}) or {}
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        for sign, text in vibes.items():
+            if text:
+                out.setdefault(sign, []).append(text)
+    return out
 
 
 # --- Workstream C: rubric rotation -------------------------------------------

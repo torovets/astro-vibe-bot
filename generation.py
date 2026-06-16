@@ -16,7 +16,12 @@ from tenacity import (
     wait_exponential,
 )
 
-from db import load_recent_intros, load_today_context, save_today_context
+from db import (
+    load_recent_intros,
+    load_recent_vibes,
+    load_today_context,
+    save_today_context,
+)
 from news import fetch_news_blob
 from prompts.loader import load_prompt
 
@@ -221,6 +226,23 @@ async def generate_daily_context(
         for sign, data in signs.items()
     }
 
+    # Anti-repeat across days: feed each sign's recent vibe opener back in so the
+    # same sign doesn't recycle yesterday's theme/opening (mirrors the intro hint).
+    recent_vibes = load_recent_vibes(n_days=2)
+    repeat_lines = []
+    for sign in signs:
+        prev = recent_vibes.get(sign)
+        if prev:
+            opener = " ".join(prev[0].split()[:12])
+            repeat_lines.append(f"- {sign}: «{opener}…»")
+    repeat_hint = ""
+    if repeat_lines:
+        repeat_hint = (
+            "\n\nНЕ повторюй недавні вайби. Нижче — початок попереднього вайбу "
+            "кожного знаку; сьогодні візьми ІНШУ тему й інший початок:\n"
+            + "\n".join(repeat_lines)
+        )
+
     system_prompt = build_channel_system(tone)
     user_prompt = (
         "Повідомлення з джерела новин:\n"
@@ -235,6 +257,7 @@ async def generate_daily_context(
         "легка й доречна цьому знаку (більшість вайбів — без новин). Жодної "
         "війни/політики в особистих вайбах. Жоден вайб не починається зі слова "
         "«Сьогодні». Лише JSON."
+        + repeat_hint
     )
 
     messages = [
