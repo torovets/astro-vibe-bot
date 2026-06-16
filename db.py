@@ -2,7 +2,11 @@ import json
 import os
 import sqlite3
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
+# DB location is configurable so it can live on a persistent disk in production.
+# On Render the app directory is ephemeral (wiped each deploy); set DATABASE_PATH
+# to a path on the mounted disk (e.g. /var/data/data.db) so forecasts, users and
+# rubric rotation survive restarts/deploys. Falls back to a local file for dev.
+DB_PATH = os.getenv("DATABASE_PATH") or os.path.join(os.path.dirname(__file__), "data.db")
 
 
 def init_db() -> None:
